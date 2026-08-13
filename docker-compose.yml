@@ -1,0 +1,13 @@
+services:
+  facebook-page-mcp:
+    build: .
+    env_file: .env
+    environment:
+      # A container must listen on all container interfaces to be reachable
+      # through the published port. Restrict accepted Host/Origin values below.
+      HOST: 0.0.0.0
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-localhost,127.0.0.1}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
