@@ -14,6 +14,10 @@
       "destination": "/api/mcp?secret=:secret"
     },
     {
+      "source": "/mcp-v2/:secret",
+      "destination": "/api/mcp?secret=:secret"
+    },
+    {
       "source": "/health",
       "destination": "/api/health"
     }
