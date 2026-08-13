@@ -130,6 +130,24 @@ function graphErrorMessage(response: Response, body: GraphErrorBody): string {
     .join(' | ');
 }
 
+function publishPermissionHint(body: GraphErrorBody): string | undefined {
+  const message = body.error?.message?.toLowerCase() ?? '';
+  if (body.error?.code === 200 && message.includes('publish_actions')) {
+    return (
+      'The MCP does not request publish_actions. Meta usually returns this legacy message when the write is not authorized with a modern Page-publishing token. ' +
+      'Regenerate a User Access Token with pages_show_list, pages_read_engagement, and pages_manage_posts granted, then obtain a fresh Page Access Token for this Page from /me/accounts and replace FB_PAGE_ACCESS_TOKEN in Vercel.'
+    );
+  }
+
+  if (body.error?.code === 200) {
+    return (
+      'Facebook Page publishing requires a Page Access Token derived from a User token that was granted pages_read_engagement and pages_manage_posts, plus CREATE_CONTENT access to the Page.'
+    );
+  }
+
+  return undefined;
+}
+
 async function graphFetch(url: URL, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, {
@@ -146,8 +164,40 @@ async function graphFetch(url: URL, init: RequestInit): Promise<Response> {
 
 async function parsePublishResponse(response: Response): Promise<GraphPublishBody> {
   const body = (await response.json().catch(() => ({}))) as GraphPublishBody;
-  if (!response.ok || body.error) throw new Error(graphErrorMessage(response, body));
+  if (!response.ok || body.error) {
+    const baseMessage = graphErrorMessage(response, body);
+    const hint = publishPermissionHint(body);
+    throw new Error(hint ? `${baseMessage} | ${hint}` : baseMessage);
+  }
   return body;
+}
+
+async function assertConfiguredPageToken(): Promise<void> {
+  const identityUrl = tokenScopedGraphUrl('me');
+  identityUrl.searchParams.set('fields', 'id,name');
+
+  const response = await graphFetch(identityUrl, {
+    method: 'GET',
+    headers: graphHeaders()
+  });
+  const body = (await response.json().catch(() => ({}))) as GraphPageBody;
+
+  if (!response.ok || body.error) {
+    throw new Error(
+      `Cannot verify FB_PAGE_ACCESS_TOKEN before publishing: ${graphErrorMessage(response, body)}`
+    );
+  }
+
+  if (!body.id) {
+    throw new Error('FB_PAGE_ACCESS_TOKEN identity response did not contain an id.');
+  }
+
+  if (body.id !== config.pageId) {
+    throw new Error(
+      `Refusing to publish: FB_PAGE_ACCESS_TOKEN identifies as ${body.name ?? 'an object'} (${body.id}), ` +
+        `but FB_PAGE_ID is ${config.pageId}. Use the Page Access Token returned for this exact Page by /me/accounts.`
+    );
+  }
 }
 
 function ensureSupportedMimeType(mimeType: string): void {
@@ -199,6 +249,8 @@ export async function publishTextPost(message: string): Promise<PublishResult> {
     };
   }
 
+  await assertConfiguredPageToken();
+
   const body = new URLSearchParams({ message });
   const response = await graphFetch(endpoint, {
     method: 'POST',
@@ -236,6 +288,8 @@ export async function publishPhotoFromUrl(
       endpoint: publicGraphEndpoint('photos')
     };
   }
+
+  await assertConfiguredPageToken();
 
   const body = new URLSearchParams({ url: imageUrl, caption, published: 'true' });
   const response = await graphFetch(endpoint, {
@@ -280,6 +334,8 @@ export async function publishPhotoFromBase64(
       endpoint: publicGraphEndpoint('photos')
     };
   }
+
+  await assertConfiguredPageToken();
 
   const form = new FormData();
   form.set('caption', caption);
@@ -369,8 +425,6 @@ export async function diagnoseConnection(): Promise<ConnectionDiagnosticsResult>
     result.configuredPageReadError = error instanceof Error ? error.message : 'Unknown Page read error';
   }
 
-  // If the token identity is not the configured Page, it may be a User token.
-  // Try listing managed Pages without requesting or exposing any Page access_token values.
   if (!result.tokenIdentityMatchesConfiguredPage) {
     const accountsUrl = tokenScopedGraphUrl('me/accounts');
     accountsUrl.searchParams.set('fields', 'id,name,tasks');
