@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import {
+  diagnoseConnection,
   getPageInfo,
   publishPhotoFromBase64,
   publishPhotoFromUrl,
@@ -9,8 +10,6 @@ import {
 
 const httpsUrl = z.url({ protocol: /^https$/ });
 
-// ChatGPT file-input contract. All four properties must be declared; only
-// download_url and file_id are required by OpenAI's fileParams specification.
 const openAIFileSchema = z.strictObject({
   download_url: httpsUrl,
   file_id: z.string().min(1),
@@ -34,6 +33,27 @@ const pageInfoOutputSchema = z.object({
   link: z.string().optional(),
   graphApiVersion: z.string(),
   dryRunWrites: z.boolean()
+});
+
+const managedPageDiagnosticSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  tasks: z.array(z.string()).optional()
+});
+
+const diagnosticsOutputSchema = z.object({
+  configuredPageId: z.string(),
+  graphApiVersion: z.string(),
+  dryRunWrites: z.boolean(),
+  tokenIdentityId: z.string(),
+  tokenIdentityName: z.string().optional(),
+  tokenIdentityMatchesConfiguredPage: z.boolean(),
+  configuredPageReadable: z.boolean(),
+  configuredPageName: z.string().optional(),
+  configuredPageReadError: z.string().optional(),
+  configuredPageFoundInManagedPages: z.boolean().optional(),
+  managedPages: z.array(managedPageDiagnosticSchema).optional(),
+  managedPagesReadError: z.string().optional()
 });
 
 const photoInputSchema = z.strictObject({
@@ -75,8 +95,37 @@ function errorResult(error: unknown) {
 export function createFacebookMcpServer(): McpServer {
   const server = new McpServer({
     name: 'facebook-page-publisher',
-    version: '1.1.0'
+    version: '1.2.2'
   });
+
+  server.registerTool(
+    'facebook_diagnose_connection',
+    {
+      title: 'Diagnose Facebook Page connection',
+      description:
+        'Read-only diagnostic for the configured Facebook token and Page. Returns the token identity, whether it matches the configured Page ID, whether the Page can be read, and managed Page IDs/tasks when the configured token appears to be a User token. Never returns access-token values.',
+      inputSchema: z.strictObject({}),
+      outputSchema: diagnosticsOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true
+      },
+      _meta: {
+        'openai/toolInvocation/invoking': 'Diagnosing Facebook connection…',
+        'openai/toolInvocation/invoked': 'Facebook connection diagnosed'
+      }
+    },
+    async () => {
+      try {
+        const result = await diagnoseConnection();
+        return successResult({ ...result });
+      } catch (error) {
+        return errorResult(error);
+      }
+    }
+  );
 
   server.registerTool(
     'facebook_get_page_info',
