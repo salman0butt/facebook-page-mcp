@@ -95,7 +95,7 @@ function errorResult(error: unknown) {
 export function createFacebookMcpServer(): McpServer {
   const server = new McpServer({
     name: 'facebook-page-publisher',
-    version: '1.2.2'
+    version: '1.2.3'
   });
 
   server.registerTool(
