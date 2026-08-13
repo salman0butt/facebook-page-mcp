@@ -1,6 +1,6 @@
 {
   "name": "facebook-page-mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "type": "module",
   "description": "TypeScript MCP server for publishing text and photo posts to a Facebook Page.",
@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "dependencies": {
     "@modelcontextprotocol/node": "^2.0.0",
