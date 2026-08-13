@@ -55,15 +55,9 @@ const server = createHttpServer((req, res) => {
   // These guards protect localhost from DNS rebinding and constrain public binds.
   if (!validateHost(req, res) || !validateOrigin(req, res)) return;
 
-  void nodeMcpHandler(req, res).catch((error) => {
-    console.error('Unhandled MCP request error:', error);
-    if (!res.headersSent) {
-      res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Internal server error' }));
-    } else if (!res.writableEnded) {
-      res.end();
-    }
-  });
+  // toNodeHandler returns a Node request listener (void), not a Promise.
+  // Adapter-level errors are handled by the onerror callback above.
+  nodeMcpHandler(req, res);
 });
 
 server.on('clientError', (error, socket) => {
