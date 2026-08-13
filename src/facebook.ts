@@ -27,6 +27,27 @@ export type PublishResult = {
   photoId?: string;
 };
 
+export type ManagedPageDiagnostic = {
+  id: string;
+  name?: string;
+  tasks?: string[];
+};
+
+export type ConnectionDiagnosticsResult = {
+  configuredPageId: string;
+  graphApiVersion: string;
+  dryRunWrites: boolean;
+  tokenIdentityId: string;
+  tokenIdentityName?: string;
+  tokenIdentityMatchesConfiguredPage: boolean;
+  configuredPageReadable: boolean;
+  configuredPageName?: string;
+  configuredPageReadError?: string;
+  configuredPageFoundInManagedPages?: boolean;
+  managedPages?: ManagedPageDiagnostic[];
+  managedPagesReadError?: string;
+};
+
 type GraphErrorBody = {
   error?: {
     message?: string;
@@ -51,6 +72,14 @@ type GraphPageBody = GraphErrorBody & {
   link?: string;
 };
 
+type GraphManagedPagesBody = GraphErrorBody & {
+  data?: Array<{
+    id?: string;
+    name?: string;
+    tasks?: string[];
+  }>;
+};
+
 function appSecretProof(): string | undefined {
   if (!config.appSecret) return undefined;
   return createHmac('sha256', config.appSecret).update(config.pageAccessToken).digest('hex');
@@ -63,6 +92,15 @@ function publicGraphEndpoint(edge?: string): string {
 
 function graphUrl(edge?: string): URL {
   const url = new URL(publicGraphEndpoint(edge));
+
+  const proof = appSecretProof();
+  if (proof) url.searchParams.set('appsecret_proof', proof);
+  return url;
+}
+
+function tokenScopedGraphUrl(path: string): URL {
+  const normalizedPath = path.replace(/^\/+/, '');
+  const url = new URL(`https://graph.facebook.com/${config.graphApiVersion}/${normalizedPath}`);
 
   const proof = appSecretProof();
   if (proof) url.searchParams.set('appsecret_proof', proof);
@@ -294,4 +332,70 @@ export async function getPageInfo(): Promise<PageInfoResult> {
     graphApiVersion: config.graphApiVersion,
     dryRunWrites: config.dryRun
   };
+}
+
+export async function diagnoseConnection(): Promise<ConnectionDiagnosticsResult> {
+  const identityUrl = tokenScopedGraphUrl('me');
+  identityUrl.searchParams.set('fields', 'id,name');
+
+  const identityResponse = await graphFetch(identityUrl, {
+    method: 'GET',
+    headers: graphHeaders()
+  });
+  const identityBody = (await identityResponse.json().catch(() => ({}))) as GraphPageBody;
+
+  if (!identityResponse.ok || identityBody.error) {
+    throw new Error(`Configured access token could not identify itself: ${graphErrorMessage(identityResponse, identityBody)}`);
+  }
+  if (!identityBody.id) {
+    throw new Error('Configured access token identity response did not contain an id.');
+  }
+
+  const result: ConnectionDiagnosticsResult = {
+    configuredPageId: config.pageId,
+    graphApiVersion: config.graphApiVersion,
+    dryRunWrites: config.dryRun,
+    tokenIdentityId: identityBody.id,
+    tokenIdentityName: identityBody.name,
+    tokenIdentityMatchesConfiguredPage: identityBody.id === config.pageId,
+    configuredPageReadable: false
+  };
+
+  try {
+    const page = await getPageInfo();
+    result.configuredPageReadable = true;
+    result.configuredPageName = page.name;
+  } catch (error) {
+    result.configuredPageReadError = error instanceof Error ? error.message : 'Unknown Page read error';
+  }
+
+  // If the token identity is not the configured Page, it may be a User token.
+  // Try listing managed Pages without requesting or exposing any Page access_token values.
+  if (!result.tokenIdentityMatchesConfiguredPage) {
+    const accountsUrl = tokenScopedGraphUrl('me/accounts');
+    accountsUrl.searchParams.set('fields', 'id,name,tasks');
+
+    try {
+      const accountsResponse = await graphFetch(accountsUrl, {
+        method: 'GET',
+        headers: graphHeaders()
+      });
+      const accountsBody = (await accountsResponse.json().catch(() => ({}))) as GraphManagedPagesBody;
+
+      if (!accountsResponse.ok || accountsBody.error) {
+        result.managedPagesReadError = graphErrorMessage(accountsResponse, accountsBody);
+      } else {
+        result.managedPages = (accountsBody.data ?? [])
+          .filter((page): page is { id: string; name?: string; tasks?: string[] } => Boolean(page.id))
+          .map((page) => ({ id: page.id, name: page.name, tasks: page.tasks }));
+        result.configuredPageFoundInManagedPages = result.managedPages.some(
+          (page) => page.id === config.pageId
+        );
+      }
+    } catch (error) {
+      result.managedPagesReadError = error instanceof Error ? error.message : 'Unknown managed Pages read error';
+    }
+  }
+
+  return result;
 }
